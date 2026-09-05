@@ -10,15 +10,28 @@ def launch_browser(headless=True):
     pw = sync_playwright().start()
     browser = pw.chromium.launch(
         headless=headless,
-        args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
+        args=[
+            "--no-sandbox",
+            "--disable-dev-shm-usage",
+            "--disable-gpu",
+            "--disable-blink-features=AutomationControlled",
+            "--window-size=1366,900",
+        ],
+        ignore_default_args=["--enable-automation"],
     )
     context = browser.new_context(
         user_agent=USER_AGENT,
         viewport={"width": 1366, "height": 900},
-        locale="en-US",
+        locale="en-IN",
+        timezone_id="Asia/Kolkata",
+        extra_http_headers={"Accept-Language": "en-IN,en;q=0.9"},
+    )
+    context.add_init_script(
+        "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
     )
     page = context.new_page()
-    page.set_default_timeout(25000)
+    page.set_default_timeout(30000)
+    page.set_default_navigation_timeout(45000)
     return pw, browser, context, page
 
 

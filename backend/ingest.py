@@ -4,13 +4,14 @@ import re
 import secrets
 import time
 from threading import Thread
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
+from backend.agent.portals import company_from_url, is_job_posting_url
 from backend.agent.runner import cycle_once, state
 from backend.db import fetch_one, get_profile, get_settings, log
 from backend.matcher import score_job
 
-URL_RE = re.compile(r"https?://[^\s<>\"']+")
+URL_RE = re.compile(r"https?://[^\s<>\"']+", re.I)
 _hits = []
 
 
@@ -43,7 +44,7 @@ def token_ok(conn, given: str) -> bool:
     return hmac.compare_digest(given, expected)
 
 
-def rate_ok(token: str, limit=30, window=600) -> bool:
+def rate_ok(token: str, limit=60, window=600) -> bool:
     now = time.time()
     key = hashlib.sha256(token.encode()).hexdigest()[:16]
     while _hits and _hits[0][0] < now - window:
@@ -55,16 +56,34 @@ def rate_ok(token: str, limit=30, window=600) -> bool:
     return True
 
 
+def _clean_url(raw: str) -> str:
+    url = unquote((raw or "").strip())
+    url = url.rstrip(").,]\"'")
+    url = url.split("#")[0]
+    if url.startswith("http://"):
+        parsed = urlparse(url)
+        if parsed.netloc:
+            url = "https://" + url[len("http://") :]
+    return url
+
+
 def extract_urls(text: str):
     urls = []
     seen = set()
-    for raw in URL_RE.findall(text or ""):
-        url = raw.rstrip(").,]\"'")
-        key = url.split("#")[0]
+    blob = unquote(text or "")
+    for raw in URL_RE.findall(blob):
+        url = _clean_url(raw)
+        if not url.startswith("http"):
+            continue
+        key = url.rstrip("/")
         if key in seen:
             continue
         seen.add(key)
         urls.append(url)
+    if not urls:
+        maybe = _clean_url(blob)
+        if maybe.startswith("http"):
+            urls.append(maybe)
     return urls
 
 
@@ -73,7 +92,7 @@ def host_name(url: str) -> str:
     return host.split(":")[0] or "Pasted"
 
 
-DONE = {"applied", "applying", "submitted"}
+DONE = {"applied", "applying", "submitted", "queued"}
 
 
 def queue_urls(conn, urls, source="ingest", extra=None):
@@ -82,13 +101,27 @@ def queue_urls(conn, urls, source="ingest", extra=None):
     added = []
     skipped = []
     for url in urls:
+        url = _clean_url(url)
+        if not url.startswith("http"):
+            skipped.append(url)
+            continue
         existing = fetch_one(conn, "SELECT * FROM jobs WHERE url = ?", (url,))
+        if not existing:
+            existing = fetch_one(
+                conn, "SELECT * FROM jobs WHERE rtrim(url, '/') = ?", (url.rstrip("/"),)
+            )
         host = host_name(url)
-        title = extra.get("title") or (existing.get("title") if existing else f"Ingested role @ {host}")
+        guessed_company = extra.get("company") or company_from_url(url)
+        if guessed_company in ("ChatGPT", "Pasted", source, ""):
+            guessed_company = company_from_url(url) or source
+        title = extra.get("title") or (existing.get("title") if existing else "")
+        if not title or title.startswith("Ingested role") or title.startswith("Pasted role"):
+            title = extra.get("title") or f"Queued role @ {host}"
         location = extra.get("location") or ((existing or {}).get("location") or "")
-        company = extra.get("company") or source
-        description = extra.get("description") or url
+        description = extra.get("description") or ((existing or {}).get("description") or url)
         score = score_job(profile, title, description, location)
+        if not extra.get("title") and is_job_posting_url(url):
+            score = max(score, 70.0)
         if existing:
             if existing.get("status") in DONE:
                 skipped.append(url)
@@ -97,7 +130,7 @@ def queue_urls(conn, urls, source="ingest", extra=None):
                 """UPDATE jobs SET company_name=?, title=?, location=?, description=?, match_score=?,
                    status='queued', updated_at=datetime('now') WHERE id=?""",
                 (
-                    company,
+                    guessed_company[:120],
                     (title or existing["title"])[:160],
                     location[:120],
                     description[:4000],
@@ -111,7 +144,14 @@ def queue_urls(conn, urls, source="ingest", extra=None):
         conn.execute(
             """INSERT INTO jobs (company_id, company_name, title, url, location, description, match_score, status)
                VALUES (NULL, ?, ?, ?, ?, ?, ?, 'queued')""",
-            (company, title[:160], url, location[:120], description[:4000], max(score, 70.0)),
+            (
+                guessed_company[:120],
+                title[:160],
+                url,
+                location[:120],
+                description[:4000],
+                max(score, 70.0),
+            ),
         )
         conn.commit()
         added.append({"id": conn.execute("SELECT last_insert_rowid()").fetchone()[0], "url": url})
@@ -146,7 +186,7 @@ def payload_urls(payload) -> tuple[list[str], dict]:
         return urls, extra
     extra = {
         "title": str(payload.get("title") or payload.get("job_title") or ""),
-        "company": str(payload.get("company") or payload.get("company_name") or "ChatGPT"),
+        "company": str(payload.get("company") or payload.get("company_name") or ""),
         "location": str(payload.get("location") or ""),
         "description": str(payload.get("description") or payload.get("notes") or ""),
     }
@@ -162,8 +202,10 @@ def payload_urls(payload) -> tuple[list[str], dict]:
                 if isinstance(item, str):
                     urls.extend(extract_urls(item))
                 elif isinstance(item, dict):
-                    nested, _ = payload_urls(item)
+                    nested, nested_extra = payload_urls(item)
                     urls.extend(nested)
+                    if nested_extra.get("title") and not extra.get("title"):
+                        extra.update({k: v for k, v in nested_extra.items() if v})
     if payload.get("text"):
         urls.extend(extract_urls(str(payload["text"])))
     seen = []

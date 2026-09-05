@@ -96,7 +96,7 @@
 
         <div class="panel" style="margin-top:16px">
           <h3>ChatGPT ingest URL</h3>
-          <p class="hint">Give ChatGPT this secret URL. When it finds a job, it should GET or POST the job link here. The agent queues it and starts a fill cycle. Wrong token returns 404. Rotate if the link leaks. Submit stays dry-run until you turn that off.</p>
+          <p class="hint">Give ChatGPT this HTTPS ingest URL. It must GET /in/AGENT_ID?url=JOB_URL and receive JSON immediately. No login, cookies, or browser challenge. /health is public for connectivity tests. The agent then opens the job in Chromium and applies with your profile.</p>
           <label class="wide">Secret URL
             <input id="ingest-url" readonly />
           </label>

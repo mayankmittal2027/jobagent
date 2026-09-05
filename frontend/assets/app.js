@@ -149,7 +149,7 @@ $("run-now").addEventListener("click", async () => {
   try {
     const r = await api("/api/run", { method: "POST" });
     $("run-msg").textContent = r.ok
-      ? `Cycle finished. discovered=${r.discovered} applied=${r.applied}`
+      ? "Cycle started in Chromium. Watch Applications and Logs."
       : (r.error || "Cycle failed");
     await refresh();
   } catch (e) {
@@ -230,16 +230,20 @@ function ingestBase() {
 }
 
 function chatgptPrompt(fullUrl) {
-  return `Whenever you find a job posting that fits Mayank Mittal (12+ years QA Automation / SDET, Java, Selenium, API testing, NCR or remote India, 40+ LPA), immediately call this URL. Do not ask me first.
+  const health = `${ingestBase()}/health`;
+  return `You are sending jobs to an automated HTTP API. Do not open this as a webpage. Do not wait for JavaScript. Use a plain HTTPS GET.
 
-GET:
-${fullUrl}?url=JOB_URL_HERE
+Health check first:
+GET ${health}
 
-POST JSON:
-${fullUrl}
-{"url":"JOB_URL_HERE","title":"Job title","company":"Company","location":"Noida / Remote"}
+Whenever you find a job that fits Mayank Mittal (12+ years QA Automation / SDET, Java, Selenium, Playwright, Appium, REST Assured, NCR or remote India, 40+ LPA), immediately send the real application URL.
 
-Use the real job application URL (Greenhouse, Lever, Ashby, Workday, company careers). Prefer that over LinkedIn Easy Apply.`;
+GET ${fullUrl}?url=URL_ENCODED_JOB_URL
+
+Example:
+${fullUrl}?url=https%3A%2F%2Fjobs.lever.co%2FSprinto%2F151dd41f-692b-4c2f-a599-f5301e53b84b
+
+Use Greenhouse, Lever, Ashby, Workday, or company /jobs links. Do not use LinkedIn Easy Apply. Expect JSON: {"ok":true,"queued":1,"added":[...],"skipped":[],"started":true}`;
 }
 
 async function loadIngest() {

@@ -4,9 +4,10 @@ from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from backend.agent.runner import NightShift, cycle_once, request_stop, state
 from backend import ingest as ingest_mod
@@ -29,6 +30,31 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+class NoChallengeMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        if request.method == "OPTIONS":
+            return Response(
+                status_code=204,
+                headers={
+                    "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Allow-Methods": "GET, POST, PATCH, OPTIONS",
+                    "Access-Control-Allow-Headers": "*",
+                    "Access-Control-Max-Age": "86400",
+                },
+            )
+        response = await call_next(request)
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        response.headers["Cache-Control"] = "no-store"
+        path = request.url.path
+        if path == "/health" or path.startswith("/in/"):
+            response.headers["Content-Type"] = "application/json"
+            response.headers["X-Robots-Tag"] = "noindex"
+        return response
+
+
+app.add_middleware(NoChallengeMiddleware)
 
 conn = connect()
 init_db(conn)
@@ -87,9 +113,25 @@ def startup():
     log(conn, "Nightshift API started on this VM")
 
 
+def health_payload():
+    return {
+        "ok": True,
+        "service": "job-application-agent",
+        "status": "ready",
+        "agent": state(),
+    }
+
+
+@app.get("/health")
 @app.get("/api/health")
 def health():
-    return {"ok": True, "agent": state()}
+    return JSONResponse(health_payload())
+
+
+@app.head("/health")
+@app.head("/api/health")
+def health_head():
+    return JSONResponse(health_payload())
 
 
 @app.get("/api/profile")
@@ -220,7 +262,7 @@ def paste_jobs(body: PastedJobsIn):
     started = False
     if body.apply_now and added:
         started = ingest_mod.start_apply(conn, job_ids=[row["id"] for row in added])
-    return {"ok": True, "added": added, "skipped": skipped, "started": started}
+    return {"ok": True, "queued": len(added), "added": added, "skipped": skipped, "started": started}
 
 
 @app.get("/api/ingest")
@@ -230,7 +272,8 @@ def ingest_info():
         "ok": True,
         "token_suffix": token[-6:],
         "path": f"/in/{token}",
-        "get_example": f"/in/{token}?url=https://boards.greenhouse.io/acme/jobs/123",
+        "health": "/health",
+        "get_example": f"/in/{token}?url=https://jobs.lever.co/acme/abc",
         "post_example": {"url": "https://jobs.lever.co/acme/abc", "title": "SDET", "company": "Acme"},
     }
 
@@ -247,22 +290,46 @@ def _ingest_request(token: str, urls, extra=None):
     if not ingest_mod.rate_ok(token):
         raise HTTPException(429, "Too many ingest requests")
     if not urls:
-        return {"ok": False, "error": "no_job_url", "added": [], "skipped": [], "started": False}
+        return {
+            "ok": False,
+            "error": "no_job_url",
+            "queued": 0,
+            "added": [],
+            "skipped": [],
+            "started": False,
+        }
     added, skipped = ingest_mod.queue_urls(conn, urls, source="ChatGPT", extra=extra)
     started = False
     if added:
         started = ingest_mod.start_apply(conn, job_ids=[row["id"] for row in added])
-    return {"ok": True, "queued": len(added), "added": added, "skipped": skipped, "started": started}
+    return {
+        "ok": True,
+        "queued": len(added),
+        "added": added,
+        "skipped": skipped,
+        "started": started,
+    }
 
 
-@app.api_route("/in/{token}", methods=["GET", "POST"])
-async def ingest_hook(token: str, request: Request, url: str | None = None, u: str | None = None, text: str | None = None):
+@app.api_route("/in/{token}", methods=["GET", "POST", "HEAD", "OPTIONS"])
+async def ingest_hook(
+    token: str,
+    request: Request,
+    url: str | None = None,
+    u: str | None = None,
+    text: str | None = None,
+    job_url: str | None = None,
+):
+    if request.method == "OPTIONS":
+        return Response(status_code=204)
     extra = {}
     urls = []
     if url:
         urls.extend(ingest_mod.extract_urls(url))
     if u:
         urls.extend(ingest_mod.extract_urls(u))
+    if job_url:
+        urls.extend(ingest_mod.extract_urls(job_url))
     if text:
         urls.extend(ingest_mod.extract_urls(text))
     if request.method == "POST":
@@ -278,9 +345,7 @@ async def ingest_hook(token: str, request: Request, url: str | None = None, u: s
         except Exception:
             pass
     result = _ingest_request(token, urls, extra)
-    if request.method == "GET" and request.headers.get("accept", "").find("text/html") >= 0:
-        return JSONResponse(result)
-    return result
+    return JSONResponse(result)
 
 
 @app.post("/api/jobs/{jid}/status")

@@ -50,7 +50,7 @@ def score_job(profile: dict, title: str, description: str, location: str) -> flo
     title_l = (title or "").lower()
     loc = (location or "").lower()
 
-    if any(k in hay for k in JUNIOR):
+    if any(k in hay for k in JUNIOR) and not any(k in title_l for k in ("senior", "lead", "staff", "principal")):
         return 5.0
     if any(k in hay for k in WRONG_TRACK) and not any(k in title_l for k in TARGET_TITLES):
         return 8.0
