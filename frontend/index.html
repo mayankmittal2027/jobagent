@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Nightshift Job Agent</title>
+  <link rel="stylesheet" href="/assets/styles.css" />
+</head>
+<body>
+  <div class="app">
+    <aside>
+      <div class="brand">
+        <div class="mark">NS</div>
+        <div>
+          <h1>Nightshift</h1>
+          <p>UI apply agent on this VM</p>
+        </div>
+      </div>
+      <nav>
+        <button class="nav on" data-tab="dashboard">Dashboard</button>
+        <button class="nav" data-tab="profile">Profile</button>
+        <button class="nav" data-tab="companies">Companies</button>
+        <button class="nav" data-tab="paste">Paste URLs</button>
+        <button class="nav" data-tab="jobs">Jobs</button>
+        <button class="nav" data-tab="apps">Applications</button>
+        <button class="nav" data-tab="logs">Logs</button>
+      </nav>
+      <div class="aside-note">
+        Discovers jobs on career pages and fills applications in a real browser. Dry-run is on by default so it will not click Submit until you enable it.
+      </div>
+    </aside>
+
+    <main>
+      <header class="top">
+        <div>
+          <h2 id="page-title">Dashboard</h2>
+          <p id="page-sub">Overnight browser apply loop</p>
+        </div>
+        <div class="status-pill" id="agent-pill">idle</div>
+      </header>
+
+      <section id="tab-dashboard" class="tab on">
+        <div class="cards">
+          <div class="card">
+            <span>Overnight</span>
+            <strong id="stat-overnight">off</strong>
+          </div>
+          <div class="card">
+            <span>Mode</span>
+            <strong id="stat-mode">dry-run</strong>
+          </div>
+          <div class="card">
+            <span>Queued jobs</span>
+            <strong id="stat-queued">0</strong>
+          </div>
+          <div class="card">
+            <span>Applied tonight</span>
+            <strong id="stat-tonight">0</strong>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h3>Run controls</h3>
+          <div class="row wrap">
+            <label class="toggle">
+              <input type="checkbox" id="overnight" />
+              <span>Enable overnight loop</span>
+            </label>
+            <label class="toggle">
+              <input type="checkbox" id="dryrun" checked />
+              <span>Dry-run (fill, do not submit)</span>
+            </label>
+            <label class="toggle">
+              <input type="checkbox" id="autosubmit" />
+              <span>Auto-submit (real apply)</span>
+            </label>
+          </div>
+          <div class="row">
+            <label>Min score
+              <input type="number" id="minscore" min="0" max="100" value="35" />
+            </label>
+            <label>Max per night
+              <input type="number" id="maxnight" min="1" max="50" value="8" />
+            </label>
+            <label>Interval (min)
+              <input type="number" id="interval" min="5" max="180" value="20" />
+            </label>
+          </div>
+          <div class="row">
+            <button class="primary" id="save-settings">Save settings</button>
+            <button id="run-now">Run one cycle now</button>
+            <button class="ghost" id="stop-now">Stop</button>
+          </div>
+          <p class="hint" id="run-msg"></p>
+        </div>
+
+        <div class="panel" style="margin-top:16px">
+          <h3>ChatGPT ingest URL</h3>
+          <p class="hint">Give ChatGPT this secret URL. When it finds a job, it should GET or POST the job link here. The agent queues it and starts a fill cycle. Wrong token returns 404. Rotate if the link leaks. Submit stays dry-run until you turn that off.</p>
+          <label class="wide">Secret URL
+            <input id="ingest-url" readonly />
+          </label>
+          <div class="row">
+            <button class="primary" id="copy-ingest">Copy URL</button>
+            <button id="copy-prompt">Copy ChatGPT prompt</button>
+            <button class="ghost" id="rotate-ingest">Rotate token</button>
+          </div>
+          <p class="hint" id="ingest-msg"></p>
+          <pre id="chatgpt-prompt"></pre>
+        </div>
+      </section>
+
+      <section id="tab-profile" class="tab">
+        <div class="panel">
+          <h3>Applicant profile</h3>
+          <div class="grid2">
+            <label>Full name <input id="full_name" /></label>
+            <label>Email <input id="email" type="email" /></label>
+            <label>Phone <input id="phone" /></label>
+            <label>Location <input id="location" placeholder="Remote / City" /></label>
+            <label>LinkedIn <input id="linkedin" /></label>
+            <label>GitHub <input id="github" /></label>
+            <label class="wide">Website <input id="website" /></label>
+            <label class="wide">Skills (comma separated) <input id="skills" placeholder="python, react, sql" /></label>
+            <label class="wide">Summary
+              <textarea id="summary" rows="4" placeholder="Short pitch used for matching"></textarea>
+            </label>
+          </div>
+          <div class="row">
+            <button class="primary" id="save-profile">Save profile</button>
+            <label class="file">
+              Upload resume
+              <input type="file" id="resume" accept=".pdf,.doc,.docx,.txt" />
+            </label>
+            <span class="hint" id="resume-name"></span>
+          </div>
+        </div>
+      </section>
+
+      <section id="tab-paste" class="tab">
+        <div class="panel">
+          <h3>Paste job links from ChatGPT</h3>
+          <p class="hint">This agent cannot open your ChatGPT chat. Copy the job URLs ChatGPT gave you and paste them here. Direct posting links work best (Greenhouse, Lever, Ashby, company /jobs pages). LinkedIn Easy Apply usually needs a login and will land in needs_review.</p>
+          <label class="wide">Job URLs
+            <textarea id="paste-urls" rows="8" placeholder="https://boards.greenhouse.io/company/jobs/123&#10;https://jobs.lever.co/company/abc&#10;https://company.wd3.myworkdayjobs.com/..."></textarea>
+          </label>
+          <div class="row">
+            <button class="primary" id="paste-save">Queue these jobs</button>
+            <button id="paste-run">Queue and run cycle</button>
+          </div>
+          <p class="hint" id="paste-msg"></p>
+        </div>
+      </section>
+
+      <section id="tab-companies" class="tab">
+        <div class="panel">
+          <h3>Career pages</h3>
+          <p class="hint">Paste company career URLs. The agent opens these pages, finds job links, then applies through the site UI.</p>
+          <div class="row">
+            <input id="co-name" placeholder="Company name" />
+            <input id="co-url" placeholder="https://company.com/careers" class="grow" />
+            <button class="primary" id="add-company">Add</button>
+          </div>
+          <table>
+            <thead>
+              <tr><th>Company</th><th>Career URL</th><th>Enabled</th></tr>
+            </thead>
+            <tbody id="co-body"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="tab-jobs" class="tab">
+        <div class="panel">
+          <h3>Discovered jobs</h3>
+          <table>
+            <thead>
+              <tr><th>Score</th><th>Title</th><th>Company</th><th>Status</th></tr>
+            </thead>
+            <tbody id="job-body"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="tab-apps" class="tab">
+        <div class="panel">
+          <h3>Application attempts</h3>
+          <table>
+            <thead>
+              <tr><th>When</th><th>Role / URL</th><th>Status</th><th>What happened</th><th>Shot</th></tr>
+            </thead>
+            <tbody id="app-body"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="tab-logs" class="tab">
+        <div class="panel">
+          <h3>Agent log</h3>
+          <pre id="log-box"></pre>
+        </div>
+      </section>
+    </main>
+  </div>
+  <script src="/assets/app.js"></script>
+</body>
+</html>
